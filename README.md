@@ -1,4 +1,5 @@
-Here is a comprehensive `README.md` file for your "Design A" robot implementation. You can save this file in your project folder alongside the Arduino script.
+** THIS SETUP IS NOT TESTED ON REAL HARDWARE **
+** USE ON YOUR OWN RISK **
 
 ---
 
