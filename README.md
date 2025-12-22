@@ -39,43 +39,42 @@ This diagram visualizes the data and power flow.
 ```mermaid
 graph TD
     %% Power Sources
-    BAT[LiPo Battery 7.4V - 11.1V]
-    BEC[5V/6V High-Amp BEC]
+    BAT["LiPo Battery (7.4V - 11.1V)"]
+    BEC["5V/6V High-Amp BEC"]
 
     %% Controllers
-    MEGA[Arduino Mega 2560]
-    RX[RadioMaster BR1 Receiver]
+    MEGA["Arduino Mega 2560"]
+    RX["RadioMaster BR1 Receiver"]
     
     %% Actuators
-    DRIVER[Motor Driver L298N / TB6612]
-    SERVOS[6x Robot Arm Servos]
-    MOTORS[2x Drive Motors]
+    DRIVER["Motor Driver (L298N / TB6612)"]
+    SERVOS["6x Robot Arm Servos"]
+    MOTORS["2x Drive Motors"]
 
     %% Power Connections
-    BAT ==>|Power (+)| DRIVER
-    BAT ==>|Power (+)| BEC
-    BAT -.->|Optional Power| MEGA
-    BEC ==>|Servo Power 6V| SERVOS
-    BEC -->|5V Logic| RX
+    BAT ==>|"Power (+)"| DRIVER
+    BAT ==>|"Power (+)"| BEC
+    BAT -.->|"Optional Power"| MEGA
+    BEC ==>|"Servo Power 6V"| SERVOS
+    BEC -->|"5V Logic"| RX
     
     %% Common Ground
-    BAT -- Common Ground -- BEC
-    BEC -- Common Ground -- MEGA
-    MEGA -- Common Ground -- DRIVER
-    MEGA -- Common Ground -- SERVOS
-    MEGA -- Common Ground -- RX
+    BAT -- "Common Ground" --- BEC
+    BEC -- "Common Ground" --- MEGA
+    MEGA -- "Common Ground" --- DRIVER
+    MEGA -- "Common Ground" --- SERVOS
+    MEGA -- "Common Ground" --- RX
 
     %% Data Connections
-    RX -->|CRSF TX Signal| MEGA
-    MEGA -->|PWM Pins 2-7| SERVOS
-    MEGA -->|Pins 8-11| DRIVER
-    DRIVER -->|Motor Output| MOTORS
+    RX -->|"CRSF TX Signal"| MEGA
+    MEGA -->|"PWM Pins 2-7"| SERVOS
+    MEGA -->|"Pins 8-11"| DRIVER
+    DRIVER -->|"Motor Output"| MOTORS
 
-    %% Pin Labels
+    %% Styling
     linkStyle 10 stroke-width:2px,fill:none,stroke:green;
     linkStyle 11 stroke-width:2px,fill:none,stroke:orange;
     linkStyle 12 stroke-width:2px,fill:none,stroke:blue;
-
 ```
 !['wiring diagram'](img/wiring_diagram.png)
 ---
