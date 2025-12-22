@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Design A - User Tuned Camera</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: sans-serif; }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: #333;
+            pointer-events: none;
+            font-weight: bold;
+            text-shadow: 1px 1px 0 #fff;
+            background: rgba(255,255,255,0.6);
+            padding: 10px;
+        }
+        #controls-help {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none;
+            font-size: 13px;
+            line-height: 1.6;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        #cam-label {
+            position: absolute;
+            bottom: 265px; 
+            right: 20px;
+            color: white;
+            background: #333;
+            padding: 2px 8px;
+            font-size: 12px;
+            font-weight: bold;
+            border-radius: 3px 3px 0 0;
+        }
+        .key {
+            display: inline-block;
+            border: 1px solid #999;
+            background: #eee;
+            border-radius: 3px;
+            padding: 0 5px;
+            font-family: monospace;
+            font-weight: bold;
+            min-width: 15px;
+            text-align: center;
+        }
+        .section-title { font-weight: bold; text-decoration: underline; margin-top: 5px; display:block;}
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="info">
+        Design A: Manual Camera Position<br>
+        <span style="font-size: 0.9em; color: #555;">Task: Pick up Blue Cube (Yellow=Ready) -> Move to Green Circle</span>
+    </div>
+
+    <div id="controls-help">
+        <span class="section-title">Arm Controls (DE Layout)</span>
+        <b>J2 (Shoulder):</b> <span class="key">Q</span> (Down) / <span class="key">A</span> (Up)<br>
+        <b>J3 (Elbow):</b> <span class="key">W</span> / <span class="key">S</span><br>
+        <b>J5 (Pitch):</b> <span class="key">E</span> / <span class="key">D</span><br>
+        <b>Gripper:</b> <span class="key">R</span> (Open) / <span class="key">F</span> (Close)<br>
+        <b>J1 (Waist):</b> <span class="key">Y</span> / <span class="key">X</span><br>
+        <b>J6 (Roll):</b> <span class="key">C</span> / <span class="key">V</span><br>
+        
+        <span class="section-title">Mobile Base</span>
+        <span class="key">⬆️</span> <span class="key">⬇️</span> <span class="key">⬅️</span> <span class="key">➡️</span>
+    </div>
+
+    <div id="cam-label">J5 Wrist Camera</div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+        // --- Configuration ---
+        const config = {
+            jointColor: 0x333333,
+            linkColor: 0xFFD700, 
+            metalColor: 0xAAAAAA,
+            gripperColor: 0x222222,
+            wheelColor: 0x111111,
+            baseColor: 0x444444
+        };
+
+        // --- State ---
+        const defaults = { J1: 90, J2: 45, J3: -90, J5: -45, J6: 90, gripper: 100 };
+        const params = { ...defaults, reset: function() { 
+            Object.assign(this, defaults);
+            if(isGrasped) { scene.attach(interactiveCube); isGrasped = false; }
+            cubeVelocityY = 0;
+            interactiveCube.position.set(3, 0.25, 3);
+            interactiveCube.rotation.set(0,0,0);
+            interactiveCube.material.color.setHex(0x0044ff);
+            mobileUnit.position.set(0, 0, 0);
+            mobileUnit.rotation.set(0, 0, 0);
+            updateJoints();
+            gui.controllers.forEach(c => c.updateDisplay());
+        }};
+
+        const keys = {};
+        const driveStats = { speed: 0.0, rotation: 0.0, maxSpeed: 0.1, maxRot: 0.04 };
+        const armSpeed = 1.0; 
+        const gripperSpeed = 2.0;
+        let isGrasped = false;
+        const GRASP_THRESHOLD = 0.8;
+        let cubeVelocityY = 0;
+        const GRAVITY = -0.015; 
+        const FLOOR_LEVEL = 0.25; 
+
+        // --- Scene Setup ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf0f0f0);
+        scene.fog = new THREE.Fog(0xf0f0f0, 20, 80);
+
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(8, 8, 10);
+
+        const cameraJ5 = new THREE.PerspectiveCamera(50, 320/240, 0.05, 50);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.autoClear = false; 
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(10, 20, 10);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        // --- Environment ---
+        const gridHelper = new THREE.GridHelper(100, 100, 0x888888, 0xcccccc);
+        scene.add(gridHelper);
+        const planeGeo = new THREE.PlaneGeometry(100, 100);
+        const planeMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+        const plane = new THREE.Mesh(planeGeo, planeMat);
+        plane.rotation.x = -Math.PI / 2;
+        plane.receiveShadow = true;
+        scene.add(plane);
+
+        // --- Objects ---
+        const cubeGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+        const cubeMat = new THREE.MeshPhongMaterial({ color: 0x0044ff });
+        const interactiveCube = new THREE.Mesh(cubeGeo, cubeMat);
+        interactiveCube.position.set(3, 0.25, 3);
+        interactiveCube.castShadow = true;
+        interactiveCube.receiveShadow = true;
+        scene.add(interactiveCube);
+
+        const targetGeo = new THREE.RingGeometry(0.1, 1.5, 32);
+        const targetMat = new THREE.MeshBasicMaterial({ color: 0x008800, side: THREE.DoubleSide, transparent: true, opacity: 0.5 });
+        const targetCircle = new THREE.Mesh(targetGeo, targetMat);
+        targetCircle.rotation.x = -Math.PI / 2;
+        targetCircle.position.set(-4, 0.01, 2);
+        scene.add(targetCircle);
+
+        function createMesh(geometry, color) {
+            const material = new THREE.MeshPhongMaterial({ color: color });
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+            return mesh;
+        }
+
+        // --- Robot ---
+        const mobileUnit = new THREE.Group();
+        scene.add(mobileUnit);
+        const Z_OFFSET = -1.2;
+
+        const chassis = createMesh(new THREE.BoxGeometry(2.5, 0.5, 3.5), config.baseColor);
+        chassis.position.set(0, 0.5, Z_OFFSET); mobileUnit.add(chassis);
+        const wheelGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.4, 32).rotateZ(Math.PI/2);
+        const hubGeo = new THREE.CylinderGeometry(0.2, 0.2, 0.42, 16).rotateZ(Math.PI/2);
+        const wFL = createMesh(wheelGeo, config.wheelColor); wFL.position.set(1.4, 0.5, -1.2+Z_OFFSET); mobileUnit.add(wFL);
+        const wFR = createMesh(wheelGeo, config.wheelColor); wFR.position.set(-1.4, 0.5, -1.2+Z_OFFSET); mobileUnit.add(wFR);
+        const wBL = createMesh(wheelGeo, config.wheelColor); wBL.position.set(1.4, 0.5, 1.2+Z_OFFSET); mobileUnit.add(wBL); wBL.add(createMesh(hubGeo, 0xff0000));
+        const wBR = createMesh(wheelGeo, config.wheelColor); wBR.position.set(-1.4, 0.5, 1.2+Z_OFFSET); mobileUnit.add(wBR); wBR.add(createMesh(hubGeo, 0xff0000));
+
+        const baseMesh = createMesh(new THREE.CylinderGeometry(0.8, 0.8, 0.2, 32), config.jointColor);
+        baseMesh.position.set(0, 0.85, Z_OFFSET); mobileUnit.add(baseMesh);
+        const pivot1 = new THREE.Group(); pivot1.position.y = 0.1; baseMesh.add(pivot1);
+        const pivot2 = new THREE.Group(); pivot2.position.y = 0.2; pivot1.add(pivot2);
+        pivot2.add(createMesh(new THREE.CylinderGeometry(0.4, 0.4, 0.8, 16).rotateX(Math.PI/2), config.jointColor));
+        const link2 = createMesh(new THREE.BoxGeometry(0.6, 2.5, 0.6), config.linkColor); link2.position.y = 1.25; pivot2.add(link2);
+        const pivot3 = new THREE.Group(); pivot3.position.y = 1.25; link2.add(pivot3);
+        const link3 = createMesh(new THREE.BoxGeometry(0.5, 2, 0.5), config.linkColor); link3.position.y = 1.0; pivot3.add(link3);
+        
+        const pivot5 = new THREE.Group(); pivot5.position.y = 1.0; link3.add(pivot5);
+        pivot5.add(createMesh(new THREE.CylinderGeometry(0.35, 0.35, 0.6, 16).rotateX(Math.PI/2), config.jointColor));
+        const link5 = createMesh(new THREE.BoxGeometry(0.4, 0.5, 0.4), config.metalColor); link5.position.y = 0.35; pivot5.add(link5);
+        
+        // ** J5 Camera: User Tuned Position **
+        pivot5.add(cameraJ5);
+        cameraJ5.position.set(-0.4, 0, 0); 
+        cameraJ5.rotation.x = Math.PI / 2;
+        cameraJ5.rotation.z = Math.PI / 2;
+
+        // Visual indicator for the camera (Moved to match the camera position)
+        const camVis = createMesh(new THREE.BoxGeometry(0.1,0.1,0.2), 0x000000);
+        camVis.position.set(-0.4, 0, 0);
+        // We rotate visual to match camera orientation roughly
+        camVis.rotation.set(Math.PI/2, 0, Math.PI/2); 
+        pivot5.add(camVis);
+
+        const pivot6 = new THREE.Group(); pivot6.position.y = 0.5; link5.add(pivot6);
+        const flange = createMesh(new THREE.CylinderGeometry(0.3, 0.3, 0.1, 16), 0x333333); flange.position.y = 0.05; pivot6.add(flange);
+        const gripperGroup = new THREE.Group(); gripperGroup.position.y = 0.1; flange.add(gripperGroup);
+        const gripBase = createMesh(new THREE.BoxGeometry(0.8, 0.2, 0.3), config.gripperColor); gripBase.position.y = 0.1; gripperGroup.add(gripBase);
+        const fingerL = createMesh(new THREE.BoxGeometry(0.1, 0.6, 0.3), config.metalColor); fingerL.position.set(-0.2, 0.4, 0); gripBase.add(fingerL);
+        const fingerR = createMesh(new THREE.BoxGeometry(0.1, 0.6, 0.3), config.metalColor); fingerR.position.set(0.2, 0.4, 0); gripBase.add(fingerR);
+        const graspPoint = new THREE.Object3D(); graspPoint.position.set(0, 0.6, 0); gripBase.add(graspPoint);
+
+        // --- Logic ---
+        function updateJoints() {
+            const rad = (deg) => deg * (Math.PI / 180);
+            pivot1.rotation.y = rad(params.J1); pivot2.rotation.z = rad(params.J2); pivot3.rotation.z = rad(params.J3); pivot5.rotation.z = rad(params.J5); pivot6.rotation.y = rad(params.J6);
+            const gap = 0.15 + (params.gripper / 100) * 0.25; fingerL.position.x = -gap; fingerR.position.x = gap;
+        }
+
+        function checkGraspLogic() {
+            const graspWorldPos = new THREE.Vector3(); graspPoint.getWorldPosition(graspWorldPos);
+            const cubeWorldPos = new THREE.Vector3(); interactiveCube.getWorldPosition(cubeWorldPos);
+            const isCloseEnough = graspWorldPos.distanceTo(cubeWorldPos) < GRASP_THRESHOLD;
+            if (!isGrasped) interactiveCube.material.color.setHex(isCloseEnough ? 0xFFD700 : 0x0044ff);
+            if (params.gripper < 10 && !isGrasped && isCloseEnough) { gripperGroup.attach(interactiveCube); isGrasped = true; interactiveCube.material.color.setHex(0x00ff00); cubeVelocityY = 0; }
+            if (params.gripper > 50 && isGrasped) { scene.attach(interactiveCube); isGrasped = false; interactiveCube.material.color.setHex(0x0044ff); interactiveCube.rotation.set(0, interactiveCube.rotation.y, 0); }
+        }
+
+        window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+        window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+        const gui = new GUI({ title: 'Design A Controls' });
+        const fJoints = gui.addFolder('Arm Angles');
+        fJoints.add(params, 'J1', -180, 180).onChange(updateJoints).listen();
+        fJoints.add(params, 'J2', -90, 90).onChange(updateJoints).listen();
+        fJoints.add(params, 'J3', -150, 150).onChange(updateJoints).listen();
+        fJoints.add(params, 'J5', -100, 100).onChange(updateJoints).listen();
+        fJoints.add(params, 'J6', -180, 180).onChange(updateJoints).listen();
+        const fTool = gui.addFolder('End Effector');
+        fTool.add(params, 'gripper', 0, 100).name('Gripper Open').listen().onChange(updateJoints);
+        gui.add(params, 'reset').name('Reset Task');
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+
+        function clamp(val, min, max) { return Math.min(Math.max(val, min), max); }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (keys['q']) params.J2 = clamp(params.J2 - armSpeed, -90, 90);
+            if (keys['a']) params.J2 = clamp(params.J2 + armSpeed, -90, 90);
+            if (keys['w']) params.J3 = clamp(params.J3 + armSpeed, -150, 150);
+            if (keys['s']) params.J3 = clamp(params.J3 - armSpeed, -150, 150);
+            if (keys['e']) params.J5 = clamp(params.J5 + armSpeed, -100, 100);
+            if (keys['d']) params.J5 = clamp(params.J5 - armSpeed, -100, 100);
+            if (keys['y'] || keys['z']) params.J1 = clamp(params.J1 + armSpeed, -180, 180);
+            if (keys['x']) params.J1 = clamp(params.J1 - armSpeed, -180, 180);
+            if (keys['c']) params.J6 = clamp(params.J6 + armSpeed, -180, 180);
+            if (keys['v']) params.J6 = clamp(params.J6 - armSpeed, -180, 180);
+            if (keys['r']) params.gripper = clamp(params.gripper + gripperSpeed, 0, 100);
+            if (keys['f']) params.gripper = clamp(params.gripper - gripperSpeed, 0, 100);
+            updateJoints();
+
+            let speed = 0; let rot = 0;
+            if (keys['arrowup']) speed -= driveStats.maxSpeed; 
+            if (keys['arrowdown']) speed += driveStats.maxSpeed;
+            if (keys['arrowleft']) rot += driveStats.maxRot; 
+            if (keys['arrowright']) rot -= driveStats.maxRot;
+
+            if (speed !== 0 || rot !== 0) {
+                mobileUnit.rotation.y += rot;
+                mobileUnit.position.addScaledVector(new THREE.Vector3(0,0,1).applyAxisAngle(new THREE.Vector3(0,1,0), mobileUnit.rotation.y), speed);
+                const ws = speed * 2; wBL.rotation.x += ws; wBR.rotation.x += ws; wFL.rotation.x += ws; wFR.rotation.x += ws;
+                const camT = mobileUnit.position.clone().add(new THREE.Vector3(0,0,-Z_OFFSET).applyAxisAngle(new THREE.Vector3(0,1,0), mobileUnit.rotation.y));
+                controls.target.copy(camT); controls.target.y += 2;
+            }
+
+            checkGraspLogic();
+
+            if (!isGrasped) {
+                cubeVelocityY += GRAVITY;
+                interactiveCube.position.y += cubeVelocityY;
+                if (interactiveCube.position.y <= FLOOR_LEVEL) {
+                    interactiveCube.position.y = FLOOR_LEVEL;
+                    cubeVelocityY = 0; 
+                }
+            }
+
+            if (!isGrasped && interactiveCube.position.y === FLOOR_LEVEL) {
+                const d = new THREE.Vector2(interactiveCube.position.x, interactiveCube.position.z)
+                          .distanceTo(new THREE.Vector2(targetCircle.position.x, targetCircle.position.z));
+                targetMat.color.setHex(d < 1.0 ? 0x00ff00 : 0x008800);
+                targetMat.opacity = d < 1.0 ? 0.8 : 0.5;
+            }
+
+            controls.update();
+
+            renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+            renderer.setScissor(0, 0, window.innerWidth, window.innerHeight);
+            renderer.setScissorTest(true);
+            renderer.clear();
+            renderer.render(scene, camera);
+
+            const pipWidth = 320;
+            const pipHeight = 240;
+            const pipLeft = window.innerWidth - pipWidth - 20;
+            const pipBottom = 20;
+            renderer.setViewport(pipLeft, pipBottom, pipWidth, pipHeight);
+            renderer.setScissor(pipLeft, pipBottom, pipWidth, pipHeight);
+            renderer.setScissorTest(true);
+            renderer.render(scene, cameraJ5);
+        }
+
+        updateJoints();
+        animate();
+
+        window.addEventListener('resize', () => { 
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.aspect = aspect; 
+            camera.updateProjectionMatrix(); 
+            renderer.setSize(window.innerWidth, window.innerHeight); 
+        });
+    </script>
+</body>
+</html>
