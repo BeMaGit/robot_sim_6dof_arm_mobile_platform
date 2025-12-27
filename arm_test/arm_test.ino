@@ -78,13 +78,13 @@ void loop() {
   // 1. Test Waist (Single Servo)
   Serial.println("Testing Waist (0-180)...");
   sWaist.startEaseTo(0);
-  while(ServoEasing::areServosMoving()) delay(20);
+  while(areAnyServosMoving()) delay(20);
   delay(1000);
   sWaist.startEaseTo(180);
-  while(ServoEasing::areServosMoving()) delay(20);
+  while(areAnyServosMoving()) delay(20);
   delay(1000);
   sWaist.startEaseTo(90);
-  while(ServoEasing::areServosMoving()) delay(20);
+  while(areAnyServosMoving()) delay(20);
   delay(1000);
 
   // 2. Test Shoulder (Dual Servo)
@@ -99,44 +99,44 @@ void loop() {
   // 3. Test Elbow
   Serial.println("Testing Elbow (0-180)...");
   sElbow.startEaseTo(0);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(1000);
   sElbow.startEaseTo(180);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(1000);
   sElbow.startEaseTo(90);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(1000);
 
   // 4. Test Wrist Pitch
   Serial.println("Testing Wrist Pitch (0-180)...");
   sWristP.startEaseTo(0);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(500);
   sWristP.startEaseTo(180);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(500);
   sWristP.startEaseTo(90);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
 
   // 5. Test Wrist Roll
   Serial.println("Testing Wrist Roll (0-180)...");
   sWristR.startEaseTo(0);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(500);
   sWristR.startEaseTo(180);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(500);
   sWristR.startEaseTo(90);
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
 
   // 6. Test Gripper
   Serial.println("Testing Gripper...");
   sGripper.startEaseTo(90); // Close? (Assuming 90 is close for now, could be 180 if requested)
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(1000);
   sGripper.startEaseTo(0);  // Open?
-  while(ServoEasing::areServosMoving()) delay(20); 
+  while(areAnyServosMoving()) delay(20); 
   delay(1000);
 
   Serial.println("Loop Complete. Pausing...");
@@ -144,6 +144,11 @@ void loop() {
 }
 
 // --- Helper Functions ---
+
+bool areAnyServosMoving() {
+  return sWaist.isMoving() || sShoulder1.isMoving() || sShoulder2.isMoving() || 
+         sElbow.isMoving() || sWristP.isMoving() || sWristR.isMoving() || sGripper.isMoving();
+}
 
 // Moves Main and Secondary Shoulder servos in synchronization
 void moveShoulder(int angle) {
@@ -159,7 +164,7 @@ void moveShoulder(int angle) {
   sShoulder1.startEaseTo(angle);
   sShoulder2.startEaseTo(angleReversed);
   
-  while(ServoEasing::areServosMoving()) {
+  while(areAnyServosMoving()) {
     delay(20);
   }
 }

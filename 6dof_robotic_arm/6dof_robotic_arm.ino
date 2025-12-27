@@ -8,6 +8,7 @@
 
 #include <AlfredoCRSF.h>
 #include <ServoEasing.hpp> // Note the .hpp extension for this library
+#include <ArduinoJson.h>
 
 // --- Configuration ---
 
@@ -144,8 +145,14 @@ void loop() {
     stopBase();
   }
   
+
   // Note: ServoEasing on AVR (Mega) uses interrupts, so we don't strictly 
   // need to call a update() function in the loop for the servos to move.
+  
+  // 3. JSON Control (USB)
+  if (Serial.available()) {
+    processJSON();
+  }
 }
 
 // --- Helper Functions ---
@@ -190,4 +197,56 @@ void setSpeedForAllServos(int speed) {
   sElbow.setSpeed(speed);
   sWristP.setSpeed(speed);
   sWristR.setSpeed(speed);
+  sWristP.setSpeed(speed);
+  sWristR.setSpeed(speed);
+}
+
+void processJSON() {
+  StaticJsonDocument<512> doc;
+  DeserializationError error = deserializeJson(doc, Serial);
+
+  if (error) {
+    // If it's just a newline or garbage, ignore or print error
+    // Serial.print(F("deserializeJson() failed: ")); 
+    // Serial.println(error.f_str());
+    return;
+  }
+
+  // --- Process Servos ---
+  if (doc.containsKey("servos")) {
+    JsonObject servos = doc["servos"];
+    
+    // Check for speed first
+    if (servos.containsKey("speed")) {
+       setSpeedForAllServos(servos["speed"]);
+    }
+
+    if (servos.containsKey("waist"))    sWaist.startEaseTo(servos["waist"]);
+    if (servos.containsKey("shoulder")) {
+      int angle = servos["shoulder"];
+      sShoulder1.startEaseTo(angle);
+      sShoulder2.startEaseTo(180 - angle);
+    }
+    if (servos.containsKey("elbow"))    sElbow.startEaseTo(servos["elbow"]);
+    if (servos.containsKey("wristP"))   sWristP.startEaseTo(servos["wristP"]);
+    if (servos.containsKey("wristR"))   sWristR.startEaseTo(servos["wristR"]);
+    if (servos.containsKey("gripper"))  sGripper.startEaseTo(servos["gripper"]);
+  }
+
+  // --- Process Motors ---
+  if (doc.containsKey("motors")) {
+    JsonObject motors = doc["motors"];
+    int left = motors["left"] | 0;
+    int right = motors["right"] | 0;
+    int duration = motors["duration"] | 0;
+
+    setMotor(PIN_LEFT_PWM, PIN_LEFT_DIR, left);
+    setMotor(PIN_RIGHT_PWM, PIN_RIGHT_DIR, right);
+
+    if (duration > 0) {
+      delay(duration); // Blocking delay for motor duration if specified
+      setMotor(PIN_LEFT_PWM, PIN_LEFT_DIR, 0);
+      setMotor(PIN_RIGHT_PWM, PIN_RIGHT_DIR, 0);
+    }
+  }
 }

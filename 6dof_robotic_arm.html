@@ -97,6 +97,37 @@
 
         <span class="section-title">Mobile Base</span>
         <span class="key">⬆️</span> <span class="key">⬇️</span> <span class="key">⬅️</span> <span class="key">➡️</span>
+        <span class="section-title">Mobile Base</span>
+        <span class="key">⬆️</span> <span class="key">⬇️</span> <span class="key">⬅️</span> <span class="key">➡️</span>
+    </div>
+
+    <div id="json-control"
+        style="position: absolute; top: 10px; left: 10px; background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; width: 300px; box-shadow: 0 0 10px rgba(0,0,0,0.1);">
+        <strong>JSON Control (USB)</strong><br>
+        <button id="btn-connect" style="margin-bottom: 5px; width: 100%;">🔌 Connect to Robot</button>
+        <div style="margin: 5px 0;">
+            <label style="margin-right: 10px;"><input type="radio" name="target" value="usb" checked> Send to
+                USB</label>
+            <label><input type="radio" name="target" value="sim"> Apply to Sim</label>
+        </div>
+        <textarea id="json-input" rows="12" style="width: 100%; font-family: monospace; font-size: 11px;">{
+  "servos": {
+    "waist": 45,
+    "shoulder": 0,
+    "elbow": 90,
+    "wristP": 0,
+    "wristR": 0,
+    "gripper": 50,
+    "speed": 60
+  },
+  "motors": {
+    "left": 100,
+    "right": 100,
+    "duration": 1000
+  }
+}</textarea>
+        <button id="btn-send" style="width: 100%; margin-top: 5px;">🚀 Send Command</button>
+        <div id="serial-status" style="font-size: 10px; margin-top: 5px; color: #666;">Not Connected</div>
     </div>
 
     <div id="cam-label">J5 Wrist Camera</div>
@@ -121,6 +152,7 @@
         const params = {
             ...defaults, reset: function () {
                 Object.assign(this, defaults);
+                Object.assign(targetParams, defaults); // Sync target
                 if (isGrasped) { scene.attach(interactiveCube); isGrasped = false; }
                 cubeVelocityY = 0;
                 interactiveCube.position.set(3, 0.25, 3);
@@ -132,9 +164,14 @@
                 gui.controllers.forEach(c => c.updateDisplay());
             }
         };
+        const targetParams = { ...defaults }; // Target for interpolation
+        let simSpeed = 60; // Degrees per second (approx)
+        const FPS = 60; // Assumed FPS for delta calculation
 
         const keys = {};
         const driveStats = { speed: 0.0, rotation: 0.0, maxSpeed: 0.1, maxRot: 0.04 };
+        // Motor State
+        const motorCmd = { active: false, speed: 0, rot: 0, endTime: 0 };
         const armSpeed = 1.0;
         const gripperSpeed = 2.0;
         let isGrasped = false;
@@ -272,13 +309,13 @@
 
         const gui = new GUI({ title: 'Design A Controls' });
         const fJoints = gui.addFolder('Arm Angles');
-        fJoints.add(params, 'J1', -90, 90).onChange(updateJoints).listen();
-        fJoints.add(params, 'J2', -90, 90).onChange(updateJoints).listen();
-        fJoints.add(params, 'J3', 0, 180).onChange(updateJoints).listen();
-        fJoints.add(params, 'J5', -90, 90).onChange(updateJoints).listen();
-        fJoints.add(params, 'J6', -90, 90).onChange(updateJoints).listen();
+        fJoints.add(params, 'J1', -90, 90).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
+        fJoints.add(params, 'J2', -90, 90).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
+        fJoints.add(params, 'J3', 0, 180).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
+        fJoints.add(params, 'J5', -90, 90).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
+        fJoints.add(params, 'J6', -90, 90).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
         const fTool = gui.addFolder('End Effector');
-        fTool.add(params, 'gripper', 0, 100).name('Gripper Open').listen().onChange(updateJoints);
+        fTool.add(params, 'gripper', 0, 100).name('Gripper Open').listen().onChange(() => { Object.assign(targetParams, params); updateJoints(); });
         gui.add(params, 'reset').name('Reset Task');
 
         const controls = new OrbitControls(camera, renderer.domElement);
@@ -289,21 +326,58 @@
         function animate() {
             requestAnimationFrame(animate);
 
-            if (keys['q']) params.J2 = clamp(params.J2 + armSpeed, -90, 90);
-            if (keys['a']) params.J2 = clamp(params.J2 - armSpeed, -90, 90);
-            if (keys['w']) params.J3 = clamp(params.J3 + armSpeed, 0, 180);
-            if (keys['s']) params.J3 = clamp(params.J3 - armSpeed, 0, 180);
-            if (keys['e']) params.J5 = clamp(params.J5 + armSpeed, -90, 90);
-            if (keys['d']) params.J5 = clamp(params.J5 - armSpeed, -90, 90);
-            if (keys['y'] || keys['z']) params.J1 = clamp(params.J1 + armSpeed, -90, 90);
-            if (keys['x']) params.J1 = clamp(params.J1 - armSpeed, -90, 90);
-            if (keys['c']) params.J6 = clamp(params.J6 + armSpeed, -90, 90);
-            if (keys['v']) params.J6 = clamp(params.J6 - armSpeed, -90, 90);
-            if (keys['r']) params.gripper = clamp(params.gripper + gripperSpeed, 0, 100);
-            if (keys['f']) params.gripper = clamp(params.gripper - gripperSpeed, 0, 100);
+            // --- Interpolation Logic ---
+            const step = simSpeed / FPS;
+
+            // Helper to move param towards target
+            const moveTowards = (key, min, max) => {
+                let curr = params[key];
+                let targ = targetParams[key];
+                if (Math.abs(curr - targ) > step) {
+                    params[key] += (targ > curr) ? step : -step;
+                } else {
+                    params[key] = targ;
+                }
+                // Clamp acts as safe guard, though target should be clamped
+                params[key] = clamp(params[key], min, max);
+            };
+
+            moveTowards('J1', -90, 90);
+            moveTowards('J2', -90, 90);
+            moveTowards('J3', 0, 180);
+            moveTowards('J5', -90, 90);
+            moveTowards('J6', -90, 90);
+            moveTowards('gripper', 0, 100);
+
+            // Manual Keys override target (and set it to keep sync)
+            if (keys['q']) targetParams.J2 = params.J2 = clamp(params.J2 + armSpeed, -90, 90);
+            if (keys['a']) targetParams.J2 = params.J2 = clamp(params.J2 - armSpeed, -90, 90);
+            if (keys['w']) targetParams.J3 = params.J3 = clamp(params.J3 + armSpeed, 0, 180);
+            if (keys['s']) targetParams.J3 = params.J3 = clamp(params.J3 - armSpeed, 0, 180);
+            if (keys['e']) targetParams.J5 = params.J5 = clamp(params.J5 + armSpeed, -90, 90);
+            if (keys['d']) targetParams.J5 = params.J5 = clamp(params.J5 - armSpeed, -90, 90);
+            if (keys['y'] || keys['z']) targetParams.J1 = params.J1 = clamp(params.J1 + armSpeed, -90, 90);
+            if (keys['x']) targetParams.J1 = params.J1 = clamp(params.J1 - armSpeed, -90, 90);
+            if (keys['c']) targetParams.J6 = params.J6 = clamp(params.J6 + armSpeed, -90, 90);
+            if (keys['v']) targetParams.J6 = params.J6 = clamp(params.J6 - armSpeed, -90, 90);
+            if (keys['r']) targetParams.gripper = params.gripper = clamp(params.gripper + gripperSpeed, 0, 100);
+            if (keys['f']) targetParams.gripper = params.gripper = clamp(params.gripper - gripperSpeed, 0, 100);
+
             updateJoints();
 
             let speed = 0; let rot = 0;
+
+            // Check Auto-Motor Command
+            if (motorCmd.active) {
+                if (Date.now() < motorCmd.endTime) {
+                    speed = motorCmd.speed;
+                    rot = motorCmd.rot;
+                } else {
+                    motorCmd.active = false;
+                    console.log("Motor command finished");
+                }
+            }
+
             if (keys['arrowup']) speed -= driveStats.maxSpeed;
             if (keys['arrowdown']) speed += driveStats.maxSpeed;
             if (keys['arrowleft']) rot += driveStats.maxRot;
@@ -362,6 +436,106 @@
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         });
+        // --- Web Serial Logic ---
+        let port;
+        let writer;
+        const btnConnect = document.getElementById('btn-connect');
+        const btnSend = document.getElementById('btn-send');
+        const txtInput = document.getElementById('json-input');
+        const lblStatus = document.getElementById('serial-status');
+
+        async function connectSerial() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 115200 }); // Match Arduino baudrate
+                const textEncoder = new TextEncoderStream();
+                const writableStreamClosed = textEncoder.writable.pipeTo(port.writable);
+                writer = textEncoder.writable.getWriter();
+                lblStatus.textContent = "Connected!";
+                lblStatus.style.color = "green";
+                btnConnect.disabled = true;
+            } catch (err) {
+                console.error(err);
+                lblStatus.textContent = "Error: " + err.message;
+            }
+        }
+
+        async function sendJSON() {
+            const jsonStr = txtInput.value;
+            let data;
+            try {
+                data = JSON.parse(jsonStr);
+            } catch (err) {
+                alert("Invalid JSON: " + err.message);
+                return;
+            }
+
+            const target = document.querySelector('input[name="target"]:checked').value;
+
+            if (target === 'usb') {
+                if (!writer) {
+                    alert("Please connect via USB first!");
+                    return;
+                }
+                try {
+                    await writer.write(jsonStr + "\n");
+                    console.log("Sent to USB:", jsonStr);
+                } catch (err) {
+                    console.error("Write error:", err);
+                    alert("Failed to send to USB");
+                }
+            } else {
+                // Apply to Simulation (Update Targets for Animation)
+                if (data.servos) {
+                    if (data.servos.speed !== undefined) simSpeed = data.servos.speed;
+                    if (data.servos.waist !== undefined) targetParams.J1 = data.servos.waist;
+                    if (data.servos.shoulder !== undefined) targetParams.J2 = data.servos.shoulder;
+                    if (data.servos.elbow !== undefined) targetParams.J3 = data.servos.elbow;
+                    if (data.servos.wristP !== undefined) targetParams.J5 = data.servos.wristP;
+                    if (data.servos.wristR !== undefined) targetParams.J6 = data.servos.wristR;
+                    if (data.servos.gripper !== undefined) targetParams.gripper = data.servos.gripper;
+
+                    // Do NOT call updateJoints() here, let animate() do it.
+                    // We can log the target
+                    console.log("New Target Set:", targetParams);
+                    console.log("New Target Set:", targetParams);
+                }
+
+                if (data.motors) {
+                    const left = data.motors.left || 0;
+                    const right = data.motors.right || 0;
+                    const duration = data.motors.duration || 0;
+
+                    if (duration > 0) {
+                        // Logic to map L/R (-255 to 255) to Speed/Rot
+                        // Forward: L=100, R=100 -> Speed > 0, Rot = 0
+                        // Turn Right: L=100, R=-100 -> Speed = 0, Rot < 0
+
+                        // Simple averaging for speed (reversed polarity check?)
+                        // If both positive, forward. 
+                        const avg = (left + right) / 2;
+                        const diff = (left - right); // Positive = Right turn? Check wiring.
+
+                        // Map 255 to maxSpeed
+                        const s = -(avg / 255) * driveStats.maxSpeed; // Negative is forward in Sim logic (see arrowup)
+                        const r = -(diff / 255) * driveStats.maxRot; // Map turn
+
+                        motorCmd.speed = s;
+                        motorCmd.rot = r;
+                        motorCmd.endTime = Date.now() + duration;
+                        motorCmd.active = true;
+
+                        console.log(`Motor Sim: Speed=${s.toFixed(3)}, Rot=${r.toFixed(3)} for ${duration}ms`);
+                    }
+                }
+
+                console.log("Applied to Sim (Gradual):", jsonStr);
+            }
+        }
+
+        btnConnect.addEventListener('click', connectSerial);
+        btnSend.addEventListener('click', sendJSON);
+
     </script>
 </body>
 
