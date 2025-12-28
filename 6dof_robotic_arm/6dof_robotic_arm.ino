@@ -12,8 +12,8 @@
 
 // --- Configuration ---
 
-// CRSF Setup (RX1 on Mega is Pin 19)
-#define CRSF_BAUDRATE 420000
+// CRSF Setup (RX2 on Mega is Pin 17, TX2 is Pin 16)
+#define CRSF_BAUDRATE 115200 // Must match Receiver Output Baud Rate
 
 // Pin Definitions
 const int PIN_WAIST      = 2;
@@ -52,8 +52,8 @@ int chWaist, chShoulder, chElbow, chWristP, chWristR, chGripper;
 
 void setup() {
   Serial.begin(115200);
-  Serial1.begin(CRSF_BAUDRATE);
-  crsf.begin(Serial1);
+  Serial2.begin(CRSF_BAUDRATE);
+  crsf.begin(Serial2);
 
   // 1. Attach Servos with Initial Angles
   // attach(pin, start_angle)
@@ -96,10 +96,10 @@ void loop() {
   if (crsf.isLinkUp()) {
     
     // --- Read Channels (Adjust mapping to your Radio) ---
-    chWaist    = crsf.getChannel(1);
+    chWaist    = crsf.getChannel(4); // Mapped to Ch4 (Rudder/Left Stick X) to avoid conflict with Steering
     chShoulder = crsf.getChannel(2);
     chDrive    = crsf.getChannel(3);
-    chTurn     = crsf.getChannel(4);
+    chTurn     = crsf.getChannel(1); // Mapped to Ch1 (Aileron/Right Stick X)
     chElbow    = crsf.getChannel(5);
     chWristP   = crsf.getChannel(6);
     chWristR   = crsf.getChannel(7);
