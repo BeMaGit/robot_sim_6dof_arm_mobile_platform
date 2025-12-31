@@ -46,43 +46,79 @@ This diagram visualizes the data and power flow.
 
 ```mermaid
 graph TD
-    %% Power Sources
-    BAT["LiPo Battery (7.4V - 11.1V)"]
-    BEC["5V/6V High-Amp BEC"]
+    subgraph Computer_Control ["💻 Computer Control"]
+        PC["PC / Laptop"]
+        WEB["Web Simulation<br>(Chrome/Edge)"]
+        PC --- WEB
+    end
 
-    %% Controllers
-    MEGA["Arduino Mega 2560"]
-    RX["RadioMaster BR1 Receiver"]
+    subgraph Radio_Control ["📡 Radio Control"]
+        TX["Radio Transmitter<br>(ELRS/EdgeTX)"]
+    end
+
+    subgraph Power_System ["🔋 Power System"]
+        BAT["LiPo Battery<br>(7.4V - 11.1V)"]
+        BEC["5V/6V High-Amp BEC"]
+    end
+
+    subgraph Robot ["🤖 Robot Hardware"]
+        subgraph Controller
+            MEGA["Arduino Mega 2560"]
+            RX["ELRS Receiver<br>(RadioMaster BR1)"]
+        end
+
+        subgraph Actuators
+            DRIVER["Motor Driver<br>(L298N / TB6612)"]
+            
+            subgraph Servos ["Arm Servos"]
+                WAIST["Waist (Pin 2)"]
+                SHOULDER["Shoulder (Pin 3 & 4)"]
+                ELBOW["Elbow (Pin 5)"]
+                WRIST_P["Wrist Pitch (Pin 6)"]
+                WRIST_R["Wrist Roll (Pin 7)"]
+                GRIP["Gripper (Pin 8)"]
+            end
+            
+            subgraph Motors ["Drive Motors"]
+                M_LEFT["Left Motor"]
+                M_RIGHT["Right Motor"]
+            end
+        end
+    end
+
+    %% Connections
+    PC == "USB Serial<br>115200 baud" ==> MEGA
+    TX -. "ELRS Radio Link<br>(CRSF)" .- RX
+    RX -- "CRSF TX -> Pin 17 (RX2)" --> MEGA
     
-    %% Actuators
-    DRIVER["Motor Driver (L298N / TB6612)"]
-    SERVOS["6x Robot Arm Servos"]
-    MOTORS["2x Drive Motors"]
-
-    %% Power Connections
-    BAT ==>|"Power (+)"| DRIVER
-    BAT ==>|"Power (+)"| BEC
-    BAT -.->|"Optional Power"| MEGA
-    BEC ==>|"Servo Power 6V"| SERVOS
-    BEC -->|"5V Logic"| RX
+    BAT == "Power (+)" ==> DRIVER
+    BAT == "Power (+)" ==> BEC
+    BEC == "Servo Power (6V)" ==> WAIST & SHOULDER & ELBOW & WRIST_P & WRIST_R & GRIP
+    BEC -- "5V Logic" --> RX
     
-    %% Common Ground
-    BAT -- "Common Ground" --- BEC
-    BEC -- "Common Ground" --- MEGA
-    MEGA -- "Common Ground" --- DRIVER
-    MEGA -- "Common Ground" --- SERVOS
-    MEGA -- "Common Ground" --- RX
-
-    %% Data Connections
-    RX -->|"CRSF TX Signal"| MEGA
-    MEGA -->|"PWM Pins 2-7"| SERVOS
-    MEGA -->|"Pins 8-11"| DRIVER
-    DRIVER -->|"Motor Output"| MOTORS
-
+    MEGA -- "PWM Pin 9" --> M_LEFT_PWM["Left PWM"]
+    MEGA -- "Dir Pin 10" --> M_LEFT_DIR["Left DIR"]
+    MEGA -- "PWM Pin 11" --> M_RIGHT_PWM["Right PWM"]
+    MEGA -- "Dir Pin 12" --> M_RIGHT_DIR["Right DIR"]
+    
+    DRIVER --> M_LEFT & M_RIGHT
+    
+    %% Wired Connections in Diagram for Servo Signals (Simplified)
+    MEGA -- "Pin 2" --> WAIST
+    MEGA -- "Pin 3, 4" --> SHOULDER
+    MEGA -- "Pin 5" --> ELBOW
+    MEGA -- "Pin 6" --> WRIST_P
+    MEGA -- "Pin 7" --> WRIST_R
+    MEGA -- "Pin 8" --> GRIP
+    
     %% Styling
-    linkStyle 10 stroke-width:2px,fill:none,stroke:green;
-    linkStyle 11 stroke-width:2px,fill:none,stroke:orange;
-    linkStyle 12 stroke-width:2px,fill:none,stroke:blue;
+    classDef power fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef pc fill:#bfb,stroke:#333,stroke-width:2px;
+    classDef radio fill:#bbf,stroke:#333,stroke-width:2px;
+    
+    class BAT,BEC power;
+    class PC,WEB pc;
+    class TX radio;
 ```
 ---
 
@@ -90,10 +126,10 @@ graph TD
 
 #### A. RadioMaster BR1 Receiver (CRSF)
 
-* **GND**  Arduino **GND**
-* **VCC**  Arduino **5V** (or BEC 5V)
-* **TX Pin**  Arduino **Pin 19 (RX1)**
-* **RX Pin**  Arduino **Pin 18 (TX1)** *(Optional, only needed if you want telemetry sent back to the radio)*
+* **GND** → Arduino **GND**
+* **VCC** → Arduino **5V** (or BEC 5V)
+* **TX Pin** → Arduino **Pin 17 (RX2)**  *(Note: Mega RX2 is Pin 17, TX2 is 16)*
+* **RX Pin** → Arduino **Pin 16 (TX2)** *(Optional, for telemetry)*
 
 #### B. Arm Servos (7x)
 
@@ -119,10 +155,10 @@ The previous code used a `PWM` + `DIR` logic. Standard L298N drivers use `IN1`, 
 
 | Arduino Pin | L298N Input | Function |
 | --- | --- | --- |
-| **Pin 8** | **ENA** | Left Motor Speed (PWM) |
-| **Pin 9** | **IN1** | Left Motor Direction* |
-| **Pin 10** | **ENB** | Right Motor Speed (PWM) |
-| **Pin 11** | **IN3** | Right Motor Direction* |
+| **Pin 9** | **ENA** / PWM | Left Motor Speed |
+| **Pin 10** | **IN1** / DIR | Left Motor Direction |
+| **Pin 11** | **ENB** / PWM | Right Motor Speed |
+| **Pin 12** | **IN3** / DIR | Right Motor Direction |
 
 > **Note on L298N Logic:** The code provided assumes a simple DIR/PWM driver. For a standard L298N:
 > 1. Connect Arduino **Pin 9** to **IN1**.
