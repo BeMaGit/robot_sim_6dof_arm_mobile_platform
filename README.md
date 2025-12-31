@@ -3,13 +3,17 @@
 
 ---
 
-# Design A: Mobile Robot Arm Control (Arduino Mega + ExpressLRS)
+# Mobile Robot Arm Control Simulation and Firmware (Arduino Mega + ExpressLRS)
 
-This project implements the control system for [**RC Rover with Robot Arm 6 DOF** by Emre Kalem](https://makerworld.com/en/models/1342319-rc-rover-with-robot-arm-6-dof?from=search#profileId-1383072), a 6-DoF robotic arm mounted on a mobile base. It uses an **Arduino Mega 2560** to receive commands from a **RadioMaster Bandit BR1** (or any ELRS receiver) via the **CRSF protocol** and map them to the robot's actuators.
+This project implements the control system for [**RC Rover with Robot Arm 6 DOF** by Emre Kalem](https://makerworld.com/en/models/1342319-rc-rover-with-robot-arm-6-dof?from=search#profileId-1383072), a 6-DoF robotic arm mounted on a mobile base. It uses an **Arduino Mega 2560** to receive commands from a **RadioMaster Bandit BR1** (or any ELRS receiver) via the **CRSF protocol** and map them to the robot's actuators.  
+
+[!['Youtube'](img/youtube_screenshot.png)](https://www.youtube.com/watch?v=FPVcoIS66Y0)
 
 !['screenshot'](img/app_screenshot.png)
 
 ## 📋 Hardware Requirements
+
+!['Physical Robot Arm'](img/20251227_212005.jpg)
 
 * **Microcontroller:** Arduino Mega 2560
 * **Radio Receiver:** RadioMaster Bandit BR1 (or compatible ExpressLRS receiver)

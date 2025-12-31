@@ -1,6 +1,6 @@
 #include <AlfredoCRSF.h>
-// #include <ServoEasing.hpp> // Removed
-#include <Servo.h>         // Direct control for all servos
+#include <ServoEasing.hpp> 
+// #include <Servo.h>         // Direct control for all servos
 #include <ArduinoJson.h>
 
 // --- Configuration ---
@@ -36,55 +36,107 @@ const float WRIST_SENSITIVITY = 0.001; // Moderate for wrist
 const float GRIPPER_SENSITIVITY = 0.001; // Moderate for gripper
 const int DEADZONE = 30;
 
+// Startup & Home Configuration (PWM Values in Microseconds)
+const int STARTUP_SPEED = 20; // Deg/Sec for startup
+const int WAIST_HOME_PWM    = 1500; // ~90 deg
+const int SHOULDER_HOME_PWM = 2400; // ~180 deg
+const int ELBOW_HOME_PWM    = 2400; // ~180 deg
+const int WRIST_P_HOME_PWM  = 1600; // ~100 deg
+const int WRIST_R_HOME_PWM  = 1500; // ~90 deg
+const int GRIPPER_HOME_PWM  = 1000; // ~45 deg
+
 // State Variables for Relative Control
 float tWaist, tShoulder, tElbow, tWristP, tWristR, tGripper; 
 
 // --- Objects ---
 AlfredoCRSF crsf;
-Servo sWaist; // CHANGED: Direct Servo
-Servo sShoulder1; // CHANGED: Direct Servo
-Servo sShoulder2; // CHANGED: Direct Servo
-Servo sElbow; 
-Servo sWristP; // CHANGED: Direct Servo
-Servo sWristR; // CHANGED: Direct Servo
-Servo sGripper; // CHANGED: Direct Servo
+ServoEasing sWaist; 
+ServoEasing sShoulder1; 
+ServoEasing sShoulder2; 
+ServoEasing sElbow; 
+ServoEasing sWristP; 
+ServoEasing sWristR; 
+ServoEasing sGripper;
 
 // --- Variables ---
 int chDrive, chTurn;
 int chWaist, chShoulder, chElbow, chWristP, chWristR, chGripper;
+int currentLeftSpeed = 0;
+int currentRightSpeed = 0;
+
+// Conversion Helper
+long map_long(long x, long in_min, long in_max, long out_min, long out_max) {
+  return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+int pwmToAngle(int pwm) {
+   // Standard Servo Range 544..2400 -> 0..180
+   // Constrain to be safe
+   int val = constrain(pwm, 544, 2400);
+   return map_long(val, 544, 2400, 0, 180);
+}
 
 void setup() {
   Serial.begin(115200);
   Serial2.begin(CRSF_BAUDRATE);
   crsf.begin(Serial2);
 
-  // 1. Attach Servos with Initial Angles
-  // attach(pin, start_angle)
-  sWaist.attach(PIN_WAIST); sWaist.write(90); tWaist = 90;
+  Serial.println("Attach Servos...");
+
+  // 1. Attach Servos - Explicitly define Min/Max Pulse Widths (Standard: 544-2400)
+  // This ensures that 0-180 degrees maps EXACTLY to 544-2400 microseconds.
+  // Using generic attach() might default to different values on some boards.
   
-  // Shoulder Direct Config
-  sShoulder1.attach(PIN_SHOULDER_1);
-  sShoulder2.attach(PIN_SHOULDER_2);
-  tShoulder = 180;
-  sShoulder1.write((int)tShoulder);
-  sShoulder2.write(180 - (int)tShoulder);
-
+  sWaist.attach(PIN_WAIST, 90, 544, 2400); 
   
-  // Elbow Direct Config
-  sElbow.attach(PIN_ELBOW); 
-  sElbow.write(180);
-  tElbow = 180;
+  sShoulder1.attach(PIN_SHOULDER_1, 180, 544, 2400); 
+  sShoulder2.attach(PIN_SHOULDER_2, 0, 544, 2400);
+  
+  sElbow.attach(PIN_ELBOW, 180, 544, 2400); 
+  
+  sWristP.attach(PIN_WRIST_P, 90, 544, 2400);
+  sWristR.attach(PIN_WRIST_R, 90, 544, 2400);
+  sGripper.attach(PIN_GRIPPER, 90, 544, 2400);
 
-  // Wrist & Gripper Direct Config
-  sWristP.attach(PIN_WRIST_P); sWristP.write(100); tWristP = 100;
-  sWristR.attach(PIN_WRIST_R); sWristR.write(90); tWristR = 90;
-  sGripper.attach(PIN_GRIPPER); sGripper.write(45); tGripper = 45;
+  // 2. Slow Startup Sequence
+  Serial.println("Starting Homing Sequence (PWM -> Angle)...");
+  
+  // Set Slow Speed
+  setSpeedForAllServos(STARTUP_SPEED);
+  
+  // Calculate Targets from PWM
+  // Since we attached with 544-2400, this mapping will be accurate.
+  tWaist    = pwmToAngle(WAIST_HOME_PWM);
+  tShoulder = pwmToAngle(SHOULDER_HOME_PWM);
+  tElbow    = pwmToAngle(ELBOW_HOME_PWM);
+  tWristP   = pwmToAngle(WRIST_P_HOME_PWM);
+  tWristR   = pwmToAngle(WRIST_R_HOME_PWM);
+  tGripper  = pwmToAngle(GRIPPER_HOME_PWM);
 
-  // 2. Configure Smoothing
-  // Direct Servo control does not use setEasingType.
+  // Command Easing
+  // Note: ServoEasing library generally requires Degrees for easing commands.
+  sWaist.startEaseTo((int)tWaist);
+  
+  // Shoulder logic: S1 normal, S2 inverse
+  sShoulder1.startEaseTo((int)tShoulder);
+  sShoulder2.startEaseTo(180 - (int)tShoulder);
+  
+  sElbow.startEaseTo((int)tElbow);
+  sWristP.startEaseTo((int)tWristP);
+  sWristR.startEaseTo((int)tWristR);
+  sGripper.startEaseTo((int)tGripper);
+  
+  // Blocking wait for startup move to complete
+  // Checking individual Servos as static check helper might be missing/named differently
+  while(sWaist.isMoving() || sShoulder1.isMoving() || sShoulder2.isMoving() || 
+        sElbow.isMoving() || sWristP.isMoving() || sWristR.isMoving() || sGripper.isMoving()) {
+    delay(20); 
+  }
+  
+  Serial.println("Homing Complete.");
 
-  // 3. Set Speed (Degrees per Second)
-  // Direct Servo control handles speed via SENSITIVITY constants in loop().
+  // 3. Restore Operational Speed
+  setSpeedForAllServos(ARM_SPEED); // 90 by default
 
   // Base Motor Setup
   pinMode(PIN_LEFT_PWM, OUTPUT);
@@ -92,7 +144,7 @@ void setup() {
   pinMode(PIN_RIGHT_PWM, OUTPUT);
   pinMode(PIN_RIGHT_DIR, OUTPUT);
   
-  Serial.println("Robot Initialized (All Joints using Standard Servo).");
+  Serial.println("Robot Ready.");
 }
 
 void loop() {
@@ -112,14 +164,11 @@ void loop() {
     chWristR   = crsf.getChannel(8);
     chGripper  = crsf.getChannel(9);
 
-    // DEBUG: Arm Joints
+    // DEBUG: JSON Output
     static unsigned long lastPrint = 0;
-    if (millis() - lastPrint > 200) { // Print 5 times/sec
+    if (millis() - lastPrint > 100) { // Print 10 times/sec (Smoother UI)
       lastPrint = millis();
-      Serial.print("Elb:"); Serial.print(tElbow);
-      Serial.print(" Shou:"); Serial.print(tShoulder);
-      Serial.print(" WrP:"); Serial.print(tWristP);
-      Serial.print(" Grip:"); Serial.println(tGripper);
+      printStatusJSON();
     }
 
     // --- Arm Control (Relative/Rate) ---
@@ -189,6 +238,9 @@ void controlMobileBase(int throttle, int steering) {
   leftSpeed = constrain(leftSpeed, -255, 255);
   rightSpeed = constrain(rightSpeed, -255, 255);
 
+  currentLeftSpeed = leftSpeed;
+  currentRightSpeed = rightSpeed;
+
   setMotor(PIN_LEFT_PWM, PIN_LEFT_DIR, leftSpeed);
   setMotor(PIN_RIGHT_PWM, PIN_RIGHT_DIR, rightSpeed);
 }
@@ -213,11 +265,43 @@ void stopBase() {
   digitalWrite(PIN_RIGHT_DIR, HIGH);
   analogWrite(PIN_LEFT_PWM, 255);
   analogWrite(PIN_RIGHT_PWM, 255);
+  
+  currentLeftSpeed = 0;
+  currentRightSpeed = 0;
 }
 
 // Helper to set speed for all arm joints
 void setSpeedForAllServos(int speed) {
-  // Direct Servo control; speed handled by sensitivity
+  // ServoEasing uses degrees/sec
+  sWaist.setSpeed(speed);
+  sShoulder1.setSpeed(speed);
+  sShoulder2.setSpeed(speed);
+  sElbow.setSpeed(speed);
+  sWristP.setSpeed(speed);
+  sWristR.setSpeed(speed);
+  sGripper.setSpeed(speed);
+}
+
+void printStatusJSON() {
+  StaticJsonDocument<512> doc;
+
+  JsonObject servos = doc.createNestedObject("servos");
+  servos["waist"] = (int)tWaist;
+  servos["shoulder"] = (int)tShoulder;
+  servos["elbow"] = (int)tElbow;
+  servos["wristP"] = (int)tWristP;
+  servos["wristR"] = (int)tWristR;
+  servos["gripper"] = (int)tGripper;
+  // Speed is static/const in this logic, but we can include it if needed.
+  // servos["speed"] = 60; 
+
+  JsonObject motors = doc.createNestedObject("motors");
+  motors["left"] = currentLeftSpeed;
+  motors["right"] = currentRightSpeed;
+  motors["duration"] = 0;
+
+  serializeJson(doc, Serial);
+  Serial.println();
 }
 
 void processJSON() {
@@ -240,16 +324,17 @@ void processJSON() {
        setSpeedForAllServos(servos["speed"].as<int>());
     }
 
-    if (servos.containsKey("waist"))    { tWaist = servos["waist"].as<int>(); sWaist.write((int)tWaist); }
+    // Use startEaseTo for smooth transitions (non-blocking)
+    if (servos.containsKey("waist"))    { tWaist = servos["waist"].as<int>(); sWaist.startEaseTo((int)tWaist); }
     if (servos.containsKey("shoulder")) {
       tShoulder = servos["shoulder"].as<int>();
-      sShoulder1.write((int)tShoulder); 
-      sShoulder2.write(180 - (int)tShoulder);
+      sShoulder1.startEaseTo((int)tShoulder); 
+      sShoulder2.startEaseTo(180 - (int)tShoulder);
     }
-    if (servos.containsKey("elbow"))    { tElbow = servos["elbow"].as<int>(); sElbow.write((int)tElbow); } 
-    if (servos.containsKey("wristP"))   { tWristP = servos["wristP"].as<int>(); sWristP.write((int)tWristP); }
-    if (servos.containsKey("wristR"))   { tWristR = servos["wristR"].as<int>(); sWristR.write((int)tWristR); }
-    if (servos.containsKey("gripper"))  { tGripper = servos["gripper"].as<int>(); sGripper.write((int)tGripper); }
+    if (servos.containsKey("elbow"))    { tElbow = servos["elbow"].as<int>(); sElbow.startEaseTo((int)tElbow); } 
+    if (servos.containsKey("wristP"))   { tWristP = servos["wristP"].as<int>(); sWristP.startEaseTo((int)tWristP); }
+    if (servos.containsKey("wristR"))   { tWristR = servos["wristR"].as<int>(); sWristR.startEaseTo((int)tWristR); }
+    if (servos.containsKey("gripper"))  { tGripper = servos["gripper"].as<int>(); sGripper.startEaseTo((int)tGripper); }
   }
 
   // --- Process Motors ---

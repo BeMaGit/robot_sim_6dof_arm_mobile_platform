@@ -1,0 +1,16 @@
+{
+  "servos": {
+    "waist": 90,
+    "shoulder": 180,
+    "elbow": 180,
+    "wristP": 100,
+    "wristR": 90,
+    "gripper": 45,
+    "speed": 60
+  },
+  "motors": {
+    "left": 0,
+    "right": 0,
+    "duration": 0
+  }
+}
