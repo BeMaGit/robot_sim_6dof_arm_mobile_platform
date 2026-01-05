@@ -41,20 +41,12 @@ const int STARTUP_SPEED = 20; // Deg/Sec for startup
 const int WAIST_HOME_PWM    = 1500; // ~90 deg
 const int SHOULDER_HOME_PWM = 2400; // ~180 deg
 const int ELBOW_HOME_PWM    = 2400; // ~180 deg
-const int WRIST_P_HOME_PWM  = 1500; // ~90 deg (Middle)
+const int WRIST_P_HOME_PWM  = 1600; // ~100 deg
 const int WRIST_R_HOME_PWM  = 1500; // ~90 deg
 const int GRIPPER_HOME_PWM  = 1000; // ~45 deg
 
 // State Variables for Relative Control
 float tWaist, tShoulder, tElbow, tWristP, tWristR, tGripper; 
-
-// --- IK Configuration & State ---
-const float L1 = 200.0; // Shoulder to Elbow (mm)
-const float L2 = 140.0; // Elbow to Wrist (mm)
-bool ikMode = false;
-float currentX = 100.0; // Initial guess, will be synced
-float currentY = 100.0;
-float globalWristAngle = 0.0; // Angle relative to horizon
 
 // --- Objects ---
 AlfredoCRSF crsf;
@@ -115,7 +107,7 @@ void setup() {
   // Calculate Targets from PWM
   // Since we attached with 544-2400, this mapping will be accurate.
   tWaist    = pwmToAngle(WAIST_HOME_PWM);
-  tShoulder = 180 - pwmToAngle(SHOULDER_HOME_PWM); // Inverted: Home(2400)=180 -> 0
+  tShoulder = pwmToAngle(SHOULDER_HOME_PWM);
   tElbow    = pwmToAngle(ELBOW_HOME_PWM);
   tWristP   = pwmToAngle(WRIST_P_HOME_PWM);
   tWristR   = pwmToAngle(WRIST_R_HOME_PWM);
@@ -125,10 +117,9 @@ void setup() {
   // Note: ServoEasing library generally requires Degrees for easing commands.
   sWaist.startEaseTo((int)tWaist);
   
-  // Shoulder logic: S1 Inverted, S2 Normal relative to tShoulder (since S2=Inv(S1))
-  // Target tShoulder=0 -> S1=180.
-  sShoulder1.startEaseTo(180 - (int)tShoulder);
-  sShoulder2.startEaseTo((int)tShoulder);
+  // Shoulder logic: S1 normal, S2 inverse
+  sShoulder1.startEaseTo((int)tShoulder);
+  sShoulder2.startEaseTo(180 - (int)tShoulder);
   
   sElbow.startEaseTo((int)tElbow);
   sWristP.startEaseTo((int)tWristP);
@@ -180,108 +171,52 @@ void loop() {
       printStatusJSON();
     }
 
-    // --- Mode Switch ---
-    int chMode = crsf.getChannel(5); // Aux 1
-    if (chMode > 1500 && !ikMode) {
-       ikMode = true;
-       syncFK();
-       Serial.println("Wrist Lock Active");
-    } else if (chMode <= 1500 && ikMode) {
-       ikMode = false;
-       Serial.println("Manual Mode Active");
-    }
-
-    // --- Arm Control ---
+    // --- Arm Control (Relative/Rate) ---
+    // Update target angles based on joystick deflection
     
-    // Always Allow Waist, Gripper, Wrist Roll
-    // Waist
+    // Waist - Direct Write
     if (abs(chWaist - 1500) > DEADZONE) tWaist += (chWaist - 1500) * WAIST_SENSITIVITY;
     tWaist = constrain(tWaist, 0, 180);
     sWaist.write((int)tWaist);
 
-    // Wrist Roll
-    if (abs(chWristR - 1500) > DEADZONE) tWristR += (chWristR - 1500) * WRIST_SENSITIVITY;
-    tWristR = constrain(tWristR, 0, 180);
-    sWristR.write((int)tWristR);
-
-    // Gripper
-    if (abs(chGripper - 1500) > DEADZONE) tGripper += (chGripper - 1500) * GRIPPER_SENSITIVITY;
-    tGripper = constrain(tGripper, 0, 90);
-    sGripper.write((int)tGripper);
-    
-    // Manual Shoulder & Elbow (Always Active now)
-    // Shoulder
+    // Shoulder - Direct Write
     if (abs(chShoulder - 1500) > DEADZONE) tShoulder += (chShoulder - 1500) * SHOULDER_SENSITIVITY;
     tShoulder = constrain(tShoulder, 0, 180);                                                 
-    sShoulder1.write(180 - (int)tShoulder);
-    sShoulder2.write((int)tShoulder);
+    // Write to both servos, inversely
+    sShoulder1.write((int)tShoulder);
+    sShoulder2.write(180 - (int)tShoulder);
 
-    // Elbow
+    // Elbow - Direct Write
     if (abs(chElbow - 1500) > DEADZONE) tElbow += (chElbow - 1500) * ELBOW_SENSITIVITY;
     tElbow = constrain(tElbow, 0, 180);
     sElbow.write((int)tElbow);
 
-    if (ikMode) {
-       // activeWristCompensation
-       
-       // Allow Manual Adjustment of Global Pitch (Wrist)
-       // If user moves Wrist Stick, update globalWristAngle
-       if (abs(chWristP - 1500) > DEADZONE) {
-           // Map input to speed or angle change? 
-           // Standard manual control drives angle directly proportional to stick (if we used position control)
-           // But here we want to adjust the OFFSET.
-           // However, existing manual logic acts as "Angle Control" (tWristP += ...)
-           // Let's do similar: Update globalWristAngle based on stick input.
-           globalWristAngle += (chWristP - 1500) * WRIST_SENSITIVITY * 0.001; // Scale down for smooth adjustment
-           // globalWristAngle is in Radians? No, wait. 
-           // In updateIKMode, we used radians. 
-           // Let's check Global Variable definition.
-           // const float toRad = PI/180.0;
-           // globalWristAngle = 0; // It's a float. 
-           // Let's assume it is in RADIANS because we used: float qWrist = globalWristAngle - (q1 + q2);
-           // And q1/q2 are radians.
-           // So (chWristP - 1500) is large (~500). Sensitivity is ~0.05?
-           // We need small radian increments. 
-           // Let's try:
-           float sensitivityRad = 0.00001; 
-           globalWristAngle += (chWristP - 1500) * sensitivityRad;
-       }
+    // Wrist Pitch - Direct Write
+    if (abs(chWristP - 1500) > DEADZONE) tWristP += (chWristP - 1500) * WRIST_SENSITIVITY;
+    tWristP = constrain(tWristP, 0, 180);
+    sWristP.write((int)tWristP);
 
-       // Calculate required Wrist Pitch to maintain global angle
-       // qWrist = Global - (q1 - q2)
-       // User Code was: 90 - (Global - (q1 + q2)) = 90 - Global + q1 + q2.
-       // User says Elbow (q2) is Wrong Direction -> Needs to be -q2.
-       // New: 90 - (Global - (q1 - q2)) = 90 - Global + q1 - q2.
-       float q1 = servoToRadS(tShoulder); 
-       float q2 = servoToRadE(tElbow);
-       float qWrist = globalWristAngle - (q1 - q2);
-       
-       // Map to Servo Angle
-       // If previous "Standard" direction (deg + 90) was "Wrong Direction" (Skyward),
-       // We need to invert the Servo Output.
-       // Standard: 90 + deg. Inverted: 90 - deg. (Or 180 - (90+deg))
-       tWristP = 90 - degrees(qWrist);
-       tWristP = constrain(tWristP, 0, 180);
-       sWristP.write((int)tWristP);
-       
-       // Sync Cartesian State just in case we switch back to full IK later or for logs
-       currentX = L1 * cos(q1) + L2 * cos(q1 + q2);
-       currentY = L1 * sin(q1) + L2 * sin(q1 + q2);
-       
-    } else {
-       // Manual Wrist Pitch
-       if (abs(chWristP - 1500) > DEADZONE) tWristP += (chWristP - 1500) * WRIST_SENSITIVITY;
-       tWristP = constrain(tWristP, 0, 180);
-       sWristP.write((int)tWristP);
-    }
-    
+    // Wrist Roll - Direct Write
+    if (abs(chWristR - 1500) > DEADZONE) tWristR += (chWristR - 1500) * WRIST_SENSITIVITY;
+    tWristR = constrain(tWristR, 0, 180);
+    sWristR.write((int)tWristR);
+
+    // Gripper - Direct Write
+    if (abs(chGripper - 1500) > DEADZONE) tGripper += (chGripper - 1500) * GRIPPER_SENSITIVITY;
+    tGripper = constrain(tGripper, 0, 90); // Gripper usually 0-90
+    sGripper.write((int)tGripper);
+
+
     // --- Base Control (Standard PWM) ---
-    // Enable Base Control always (User undid "IK Mode")
     controlMobileBase(chDrive, chTurn);
+
   } else {
     stopBase();
   }
+  
 
+  // Note: Standard Servo library works without explicit update call
+  
   // 3. JSON Control (USB)
   if (Serial.available()) {
     processJSON();
@@ -393,8 +328,8 @@ void processJSON() {
     if (servos.containsKey("waist"))    { tWaist = servos["waist"].as<int>(); sWaist.startEaseTo((int)tWaist); }
     if (servos.containsKey("shoulder")) {
       tShoulder = servos["shoulder"].as<int>();
-      sShoulder1.startEaseTo(180 - (int)tShoulder); 
-      sShoulder2.startEaseTo((int)tShoulder);
+      sShoulder1.startEaseTo((int)tShoulder); 
+      sShoulder2.startEaseTo(180 - (int)tShoulder);
     }
     if (servos.containsKey("elbow"))    { tElbow = servos["elbow"].as<int>(); sElbow.startEaseTo((int)tElbow); } 
     if (servos.containsKey("wristP"))   { tWristP = servos["wristP"].as<int>(); sWristP.startEaseTo((int)tWristP); }
@@ -419,123 +354,3 @@ void processJSON() {
     }
   }
 }
-
-// --- IK Functions ---
-
-// Convert Servo Angle (0-180) to Geometric Angle (radians)
-float servoToRadS(float angle) {
-  // Shoulder: 180 is Up/Back? 
-  // Code says 180 is home. 2400us.
-  // Let's assume 180 is vertical up for now to match "elbow up" logic
-  // If 180 is up (90 deg geom), and 90 is forward (0 deg geom).
-  // Then angle_geom = angle_servo - 90.
-  // Shoulder Inverted: 0 input -> 180 servo (Up/Back?), 180 input -> 0 servo (Forward)
-  // If we assume standard model where 0 is Forward, 180 is Back.
-  // Our input 0 -> 180 degrees geom. Input 180 -> 0 degrees geom.
-  return radians(180 - angle);  
-}
-
-float servoToRadE(float angle) {
-  // If 180 is straight out relative to shoulder link?
-  return radians(angle - 180);
-}
-
-// Convert Geometric Angle (radians) to Servo Angle (0-180)
-float radToServoS(float angle) {
-  return 180 - degrees(angle);
-}
-
-float radToServoE(float angle) {
-  return degrees(angle) + 180;
-}
-
-void syncFK() {
-  // Sync state from current servo positions
-  // Note: Only approximations if servo isn't calibrated perfectly to math model
-  float q1 = radians(tShoulder); 
-  float q2 = radians(tElbow - 180); 
-  
-  // Forward Kinematics
-  // Assumes q1=0 is Horizontal Forward, q2=0 is Straight
-  // x = l1 c1 + l2 c(1+2)
-  // y = l1 s1 + l2 s(1+2)
-  currentX = L1 * cos(q1) + L2 * cos(q1 + q2);
-  currentY = L1 * sin(q1) + L2 * sin(q1 + q2);
-  
-  // Wrist Pitch relative to horizon
-  // global = q1 + q2 + qWrist
-  // If tWristP=90 is straight with arm -> qWrist=0
-  float qWrist = radians(tWristP - 90);
-  globalWristAngle = q1 + q2 + qWrist;
-}
-
-void updateIKMode(int inputX, int inputY) {
-  // Input Deadzone and Scaling
-  float dX = 0;
-  float dY = 0;
-  
-  // Ch1 (Turn) -> X (Reach). Right is Positive (Forward?)
-  // Ch2 (Pitch) -> Y (Height). Up is Positive.
-  
-  if (abs(inputX - 1500) > DEADZONE) dX = (inputX - 1500) * 0.005; // Tunable Speed
-  if (abs(inputY - 1500) > DEADZONE) dY = (inputY - 1500) * 0.005;
-  
-  if (dX == 0 && dY == 0) return; 
-  
-  // Proposed New Position
-  float nextX = currentX + dX;
-  float nextY = currentY + dY;
-  
-  // Check Reachability (Simple Radius Check)
-  float distSq = nextX*nextX + nextY*nextY;
-  float maxReach = (L1 + L2) * 0.99; 
-  if (distSq > maxReach * maxReach) {
-     return; // Limit reached
-  }
-  
-  // Solve IK (2-Link Planar)
-  // c2 = (x^2 + y^2 - l1^2 - l2^2) / (2 l1 l2)
-  float c2 = (distSq - L1*L1 - L2*L2) / (2 * L1 * L2);
-  
-  if (c2 < -1.0 || c2 > 1.0) return; // Unreachable
-  
-  // q2 (Elbow Angle). 
-  // Using -acos for "Elbow Up" if Y is positive up?
-  // Let's assume Elbow Up configuration. 
-  // If q2 is negative, it bends "up/back" relative to extended line?
-  // Depends on frame.
-  float q2 = -acos(c2); 
-  
-  // q1 (Shoulder Angle)
-  // theta1 = atan2(y, x) - atan2(k2, k1)
-  float k1 = L1 + L2 * c2; // L1 + L2 cos(q2)
-  float k2 = L2 * sin(q2);
-  float q1 = atan2(nextY, nextX) - atan2(k2, k1);
-  
-  // Servo Constraints
-  float sAng = degrees(q1); 
-  float eAng = degrees(q2) + 180; 
-  
-  if (sAng < 0 || sAng > 180 || eAng < 0 || eAng > 180) return; 
-  
-  // Commit
-  currentX = nextX;
-  currentY = nextY;
-  
-  tShoulder = sAng;
-  tElbow = eAng;
-  
-  // Wrist Compensation
-  // qWrist = Global - (q1 + q2)
-  // tWrist = deg(qWrist) + 90
-  float qWrist = globalWristAngle - (q1 + q2);
-  tWristP = degrees(qWrist) + 90;
-  tWristP = constrain(tWristP, 0, 180);
-  
-  // Apply to Servos
-  sShoulder1.write(180 - (int)tShoulder);
-  sShoulder2.write((int)tShoulder);
-  sElbow.write((int)tElbow);
-  sWristP.write((int)tWristP);
-}
-

@@ -112,11 +112,11 @@
         </div>
         <textarea id="json-input" rows="12" style="width: 100%; font-family: monospace; font-size: 11px;">{
   "servos": {
-    "waist": 45,
-    "shoulder": 0,
-    "elbow": 90,
-    "wristP": 0,
-    "wristR": 0,
+    "waist": 0,
+    "shoulder": 180,
+    "elbow": 180,
+    "wristP": 90,
+    "wristR": 90,
     "gripper": 50,
     "speed": 60
   },
@@ -148,7 +148,16 @@
         };
 
         // --- State ---
-        const defaults = { J1: 0, J2: -80, J3: 160, J5: 10, J6: 90, gripper: 0 };
+        // New Defaults matching Real Robot (Display Values)
+        const defaults = { J1: 0, J2: 0, J3: 180, J5: 90, J6: 90, gripper: 50 };
+
+        // Offsets: Visual = Display + Offset
+        // J2: Display 180 -> Visual 0   => Offset -180 (Fixed: Up)
+        // J3: Display 180 -> Visual 160 => Offset -20
+        // J5: Display 90  -> Visual 10  => Offset -80
+        // Gr: Display 50  -> Visual 0   => Offset -50
+        const OFFSETS = { J2: -90, J3: -20, J5: -80, gripper: -50 };
+
         const params = {
             ...defaults, reset: function () {
                 Object.assign(this, defaults);
@@ -162,6 +171,7 @@
                 mobileUnit.rotation.set(0, 0, 0);
                 updateJoints();
                 gui.controllers.forEach(c => c.updateDisplay());
+                syncFK();
             }
         };
         const targetParams = { ...defaults }; // Target for interpolation
@@ -307,8 +317,26 @@
         // --- Logic ---
         function updateJoints() {
             const rad = (deg) => deg * (Math.PI / 180);
-            pivot1.rotation.y = rad(params.J1) - Math.PI / 2; pivot2.rotation.z = rad(params.J2); pivot3.rotation.z = rad(params.J3); pivot5.rotation.z = rad(params.J5); pivot6.rotation.y = rad(params.J6);
-            const gap = 0.15 + (params.gripper / 100) * 0.25; fingerL.position.x = -gap; fingerR.position.x = gap;
+
+            // Apply Offsets to convert Display -> Visual
+            const visJ2 = params.J2 + OFFSETS.J2;
+            const visJ3 = params.J3 + OFFSETS.J3;
+            const visJ5 = params.J5 + OFFSETS.J5;
+            const visGripper = params.gripper + OFFSETS.gripper;
+
+            pivot1.rotation.y = rad(params.J1) - Math.PI / 2;
+            pivot2.rotation.z = rad(visJ2);
+            pivot3.rotation.z = rad(visJ3);
+            pivot5.rotation.z = rad(visJ5);
+            pivot6.rotation.y = rad(params.J6);
+
+            // Visual Gripper 0 means gap=0.15. Range 0-100 logic.
+            // If visGripper goes negative (Display < 50), it works.
+            const gap = 0.15 + (visGripper / 100) * 0.25;
+            // Clamp gap safely?
+            // gap = Math.max(0.15, gap); // If desired
+
+            fingerL.position.x = -gap; fingerR.position.x = gap;
         }
 
         function checkGraspLogic() {
@@ -316,6 +344,19 @@
             const cubeWorldPos = new THREE.Vector3(); interactiveCube.getWorldPosition(cubeWorldPos);
             const isCloseEnough = graspWorldPos.distanceTo(cubeWorldPos) < GRASP_THRESHOLD;
             if (!isGrasped) interactiveCube.material.color.setHex(isCloseEnough ? 0xFFD700 : 0x0044ff);
+
+            // Params.gripper > 0 = Open. Close is < ...
+            // Display: 50 is Closed(ish)? 
+            // Original: > 50 open. < 10 close.
+            // New Default: 50. visual 0.
+            // Let's assume user keeps 0-100 logic relative to display?
+            // If display > 60 open?
+            // "gripper": 50 in JSON?
+
+            // Maintain Logic relative to Display Value for simplicity
+            // if (params.gripper < 40 ... ) 
+            // Let's rely on standard UI interaction.
+
             if (params.gripper < 10 && !isGrasped && isCloseEnough) { gripperGroup.attach(interactiveCube); isGrasped = true; interactiveCube.material.color.setHex(0x00ff00); cubeVelocityY = 0; }
             if (params.gripper > 50 && isGrasped) { scene.attach(interactiveCube); isGrasped = false; interactiveCube.material.color.setHex(0x0044ff); interactiveCube.rotation.set(0, interactiveCube.rotation.y, 0); }
         }
@@ -327,18 +368,31 @@
 
         function maintainWrist() {
             if (params.wristLock) {
-                console.log("WristLock Active. Current Global:", currentState.globalPitch);
+                // console.log("WristLock Active. Current Global:", currentState.globalPitch);
                 // Goal: Keep Global Pitch constant
                 // Current Body Angles: J2 (Shoulder), J3 (Elbow)
-                const q1 = THREE.MathUtils.degToRad(targetParams.J2);
-                const q2 = THREE.MathUtils.degToRad(targetParams.J3 - 180);
+                // Use Visual Angles for Kinematics or Display?
+                // Visual Angles correspond to physical geometry in Sim.
+
+                const visJ2 = params.J2 + OFFSETS.J2;
+                const visJ3 = params.J3 + OFFSETS.J3;
+
+                const q1 = THREE.MathUtils.degToRad(visJ2);
+                const q2 = THREE.MathUtils.degToRad(visJ3 - 180); // Original: J3-180. 
+                // Wait, original logic: `rad(params.J3 - 180)`.
+                // If original params.J3 was 160. rad(-20).
+                // New visJ3 is 160. rad(-20). Correct matches.
 
                 // qWrist = Global - (q1 + q2)
                 const qWrist = currentState.globalPitch - (q1 + q2);
-                let j5_deg = THREE.MathUtils.radToDeg(qWrist);
+                let visJ5_deg = THREE.MathUtils.radToDeg(qWrist);
 
-                if (j5_deg < -90) j5_deg = -90; if (j5_deg > 90) j5_deg = 90;
-                targetParams.J5 = params.J5 = j5_deg;
+                // Convert Visual J5 -> Display J5
+                // Display = Visual - Offset
+                let displayJ5 = visJ5_deg - OFFSETS.J5;
+
+                if (displayJ5 < 0) displayJ5 = 0; if (displayJ5 > 180) displayJ5 = 180;
+                targetParams.J5 = params.J5 = displayJ5;
 
                 // Update State for cleanliness
                 const x = IK_L1 * Math.cos(q1) + IK_L2 * Math.cos(q1 + q2);
@@ -351,7 +405,9 @@
 
         const fJoints = gui.addFolder('Arm Angles');
         fJoints.add(params, 'J1', -90, 90).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
-        fJoints.add(params, 'J2', -90, 90).onChange(() => {
+
+        // Updated Ranges 0-180
+        fJoints.add(params, 'J2', 0, 180).onChange(() => {
             Object.assign(targetParams, params);
             maintainWrist();
         }).listen();
@@ -361,19 +417,27 @@
             maintainWrist();
         }).listen();
 
-        fJoints.add(params, 'J5', -90, 90).onChange(() => {
+        fJoints.add(params, 'J5', 0, 180).onChange(() => {
             Object.assign(targetParams, params);
             if (params.wristLock) {
                 // If user Manually moves Wrist in Wrist Lock Mode, update the Global Pitch target
-                const q1 = THREE.MathUtils.degToRad(params.J2);
-                const q2 = THREE.MathUtils.degToRad(params.J3 - 180);
-                const qWrist = THREE.MathUtils.degToRad(params.J5);
+                const visJ2 = params.J2 + OFFSETS.J2;
+                const visJ3 = params.J3 + OFFSETS.J3;
+                const visJ5 = params.J5 + OFFSETS.J5;
+
+                const q1 = THREE.MathUtils.degToRad(visJ2);
+                const q2 = THREE.MathUtils.degToRad(visJ3 - 180);
+                const qWrist = THREE.MathUtils.degToRad(visJ5); // Original used params.J5 directly as Angle?
+                // Original: `pivot5.rotation.z = rad(params.J5)`. `rad(params.J5)` was qWrist.
+                // In syncFK: `qWrist = degToRad(params.J5)`.
+                // So yes, verify J5 matches visual angle logic.
+
                 currentState.globalPitch = q1 + q2 + qWrist;
             }
             updateJoints();
         }).listen();
 
-        fJoints.add(params, 'J6', -90, 90).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
+        fJoints.add(params, 'J6', 0, 180).onChange(() => { Object.assign(targetParams, params); updateJoints(); }).listen();
         const fTool = gui.addFolder('End Effector');
         fTool.add(params, 'gripper', 0, 100).name('Gripper Open').listen().onChange(() => { Object.assign(targetParams, params); updateJoints(); });
 
@@ -403,12 +467,12 @@
 
         function syncFK() {
             // Forward Kinematics to capture current X/Y and Global Pitch
-            const q1 = THREE.MathUtils.degToRad(params.J2); // Shoulder
-            const q2 = THREE.MathUtils.degToRad(params.J3 - 180); // Elbow (180 is straight) -> -90 is down
+            const visJ2 = params.J2 + OFFSETS.J2;
+            const visJ3 = params.J3 + OFFSETS.J3;
+            const visJ5 = params.J5 + OFFSETS.J5;
 
-            // Check Joint 3 direction in Sim.
-            // J3=160 (Default) looks "bent". J3=180 is straight.
-            // Sim Logic: pivot3.rotation.z = rad(params.J3);
+            const q1 = THREE.MathUtils.degToRad(visJ2); // Shoulder Visual
+            const q2 = THREE.MathUtils.degToRad(visJ3 - 180); // Elbow (180 is straight)
 
             // Forward Kinematics
             // Base at (0,0) (Shoulder Pivot)
@@ -417,8 +481,8 @@
 
             // Wrist Relative to Horizon
             // Global = q1 + q2 + qWrist(J5)
-            // qWrist(J5) = degToRad(params.J5)
-            const qWrist = THREE.MathUtils.degToRad(params.J5);
+            // Visual J5 = qWrist?
+            const qWrist = THREE.MathUtils.degToRad(visJ5);
             currentState.globalPitch = q1 + q2 + qWrist;
 
             // console.log("FK Synced: ", currentState);
@@ -446,10 +510,6 @@
             // Sim: J3=180 is Straight. 
             // Math: q2=0 is Straight.
             // Sim J3 = q2_deg + 180
-            // Elbow Up or Down? Sim default J3=160 (bent "up" relative to gravity or down?)
-            // If Shoulder J2=-80 (down), J3=160 (bent forward). 
-            // In Sim, Positive Z rotation is CCW. 
-            // Let's try q2 = -acos(c2) (Standard Elbow Up) vs +acos(c2)
             const q2 = -Math.acos(c2);
 
             // Shoulder Angle (q1)
@@ -457,29 +517,34 @@
             const k2 = IK_L2 * Math.sin(q2);
             const q1 = Math.atan2(nextY, nextX) - Math.atan2(k2, k1);
 
-            // Convert to Sim Params
-            let j2_deg = THREE.MathUtils.radToDeg(q1);
-            let j3_deg = THREE.MathUtils.radToDeg(q2) + 180;
+            // Convert to Sim Params (Visual)
+            let visJ2_deg = THREE.MathUtils.radToDeg(q1);
+            let visJ3_deg = THREE.MathUtils.radToDeg(q2) + 180;
+
+            // Convert Visual -> Display
+            let displayJ2 = visJ2_deg - OFFSETS.J2;
+            let displayJ3 = visJ3_deg - OFFSETS.J3;
 
             // Constrain
-            if (j2_deg < -90) j2_deg = -90; if (j2_deg > 90) j2_deg = 90;
-            if (j3_deg < 0) j3_deg = 0; if (j3_deg > 180) j3_deg = 180;
+            if (displayJ2 < 0) displayJ2 = 0; if (displayJ2 > 180) displayJ2 = 180;
+            if (displayJ3 < 0) displayJ3 = 0; if (displayJ3 > 180) displayJ3 = 180;
 
             // Update State
             currentState.x = nextX;
             currentState.y = nextY;
 
             // Apply
-            targetParams.J2 = params.J2 = j2_deg;
-            targetParams.J3 = params.J3 = j3_deg;
+            targetParams.J2 = params.J2 = displayJ2;
+            targetParams.J3 = params.J3 = displayJ3;
 
             // Wrist Compensation
             // qWrist = Global - (q1 + q2)
             const qWrist = currentState.globalPitch - (q1 + q2);
-            let j5_deg = THREE.MathUtils.radToDeg(qWrist);
+            let visJ5_deg = THREE.MathUtils.radToDeg(qWrist);
+            let displayJ5 = visJ5_deg - OFFSETS.J5;
 
-            if (j5_deg < -90) j5_deg = -90; if (j5_deg > 90) j5_deg = 90;
-            targetParams.J5 = params.J5 = j5_deg;
+            if (displayJ5 < 0) displayJ5 = 0; if (displayJ5 > 180) displayJ5 = 180;
+            targetParams.J5 = params.J5 = displayJ5;
         }
 
         const controls = new OrbitControls(camera, renderer.domElement);
@@ -506,11 +571,11 @@
                 params[key] = clamp(params[key], min, max);
             };
 
-            moveTowards('J1', -90, 90);
-            moveTowards('J2', -90, 90);
+            moveTowards('J1', 0, 180);
+            moveTowards('J2', 0, 180);
             moveTowards('J3', 0, 180);
-            moveTowards('J5', -90, 90);
-            moveTowards('J6', -90, 90);
+            moveTowards('J5', 0, 180);
+            moveTowards('J6', 0, 180);
             moveTowards('gripper', 0, 100);
 
             // Manual Keys override target (and set it to keep sync)
@@ -521,21 +586,21 @@
 
             // Wrist J5 Keys: E/D
             if (keys['e']) {
-                targetParams.J5 = params.J5 = clamp(params.J5 + armSpeed, -90, 90);
+                targetParams.J5 = params.J5 = clamp(params.J5 + armSpeed, 0, 180);
                 if (params.wristLock) {
                     // Update Global Pitch to match new wrist angle
                     const q1 = THREE.MathUtils.degToRad(params.J2);
-                    const q2 = THREE.MathUtils.degToRad(params.J3 - 180);
+                    const q2 = THREE.MathUtils.degToRad(params.J3 - 90);
                     const qWrist = THREE.MathUtils.degToRad(params.J5);
                     currentState.globalPitch = q1 + q2 + qWrist;
                 }
             }
             if (keys['d']) {
-                targetParams.J5 = params.J5 = clamp(params.J5 - armSpeed, -90, 90);
+                targetParams.J5 = params.J5 = clamp(params.J5 - armSpeed, 0, 180);
                 if (params.wristLock) {
                     // Update Global Pitch
                     const q1 = THREE.MathUtils.degToRad(params.J2);
-                    const q2 = THREE.MathUtils.degToRad(params.J3 - 180);
+                    const q2 = THREE.MathUtils.degToRad(params.J3 - 90);
                     const qWrist = THREE.MathUtils.degToRad(params.J5);
                     currentState.globalPitch = q1 + q2 + qWrist;
                 }
@@ -637,15 +702,35 @@
         async function connectSerial() {
             try {
                 port = await navigator.serial.requestPort();
-                await port.open({ baudRate: 115200 }); // Match Arduino baudrate
-                const textEncoder = new TextEncoderStream();
-                const writableStreamClosed = textEncoder.writable.pipeTo(port.writable);
-                writer = textEncoder.writable.getWriter();
+                // Check if the port is already open (writable)
+                if (!port.writable) {
+                    await port.open({ baudRate: 115200 }); // Match Arduino baudrate
+                }
+
+                // Setup writer if it doesn't exist
+                if (!writer) {
+                    const textEncoder = new TextEncoderStream();
+                    const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+                    writer = textEncoder.writable.getWriter();
+                }
+
                 lblStatus.textContent = "Connected!";
                 lblStatus.style.color = "green";
                 btnConnect.disabled = true;
             } catch (err) {
                 console.error(err);
+                // Attempt recovery if port is somehow writable but writer failed
+                if (port && port.writable && !writer) {
+                    try {
+                        const textEncoder = new TextEncoderStream();
+                        const writableStreamClosed = textEncoder.readable.pipeTo(port.writable);
+                        writer = textEncoder.writable.getWriter();
+                        lblStatus.textContent = "Connected! (Recovered)";
+                        lblStatus.style.color = "green";
+                        btnConnect.disabled = true;
+                        return;
+                    } catch (e) { console.error("Recovery failed:", e); }
+                }
                 lblStatus.textContent = "Error: " + err.message;
             }
         }
